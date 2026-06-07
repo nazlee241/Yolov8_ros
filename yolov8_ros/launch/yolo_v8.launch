@@ -7,11 +7,13 @@
   <param name="use_cpu"           value="true" />
 
   <!-- Start yolov5 and ros wrapper -->
-  <node pkg="yolov8_ros" type="yolo_v8.py" name="yolov8_ros" output="screen" >
-    <param name="weight_path"       value="$(find yolov8_ros)/weights/yolov8s.pt"/>
-    <param name="image_topic"       value="/camera/color/image_raw" />
-    <param name="pub_topic"         value="/yolov8/BoundingBoxes" />
-    <param name="camera_frame"       value="camera_color_frame"/>
+  <node pkg="yolov8_ros" type="fusion_overlay.py" name="yolov8_ros" output="screen" >
+    <param name="weight_path"       value="$(find yolov8_ros)/weights/palmtree2.pt"/>
+    <param name="image_topic"       value="/zed2i/zed_node/left/image_rect_color" />
+    <param name="lidar_topic"       value="/ouster/points" />
+    <param name="output_topic"       value="/lidar_overlay/fused_image" />
+    <!-- <param name="pub_topic"         value="/yolov8/BoundingBoxes" /> -->
+    <!-- <param name="camera_frame"       value="camera_color_frame"/> -->
     <param name="visualize"       value="true"/>
     <param name="conf"              value="0.3" />
   </node>

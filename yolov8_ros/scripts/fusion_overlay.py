@@ -22,7 +22,7 @@ class FusionLidarImageOverlay:
         self.output_topic = rospy.get_param("~output_topic", "/lidar_overlay/fused_image")
         
         # YOLO parameters
-        self.yolo_model_path = rospy.get_param("~yolo_model", "/home/amt4/yolo_ros/src/Yolov8_ros/yolov8_ros/weights/palmtree2.pt")
+        self.yolo_model_path = rospy.get_param("~yolo_model", "/home/amt4/yolov8_ros/src/Yolov8_ros/yolov8_ros/weights/palmtree2.pt")
         self.conf_threshold = rospy.get_param("~conf_threshold", 0.5)
         self.target_classes = rospy.get_param("~target_classes", [0]) #0=palmtree
         
