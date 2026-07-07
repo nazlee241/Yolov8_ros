@@ -47,13 +47,13 @@ class FusionLidarImageOverlay:
         
         # ---- [NEW] LiDAR Trunk Detection Params ----
         self.cluster_eps = rospy.get_param("~cluster_eps", 0.5)
-        self.cluster_min_samples = rospy.get_param("~cluster_min_samples", 10)
-        self.ransac_iterations = rospy.get_param("~ransac_iterations", 150)
-        self.cylinder_inlier_thresh = rospy.get_param("~cylinder_inlier_thresh", 0.05)
-        self.min_cluster_height = rospy.get_param("~min_cluster_height", 1.5)
+        self.cluster_min_samples = rospy.get_param("~cluster_min_samples", 20)  #10
+        self.ransac_iterations = rospy.get_param("~ransac_iterations", 200) #150
+        self.cylinder_inlier_thresh = rospy.get_param("~cylinder_inlier_thresh", 0.20) #0.05
+        self.min_cluster_height = rospy.get_param("~min_cluster_height", 0.5)
         
         # ---- [NEW] Row Alignment Params ----
-        self.row_spacing = rospy.get_param("~row_spacing", 9.0)
+        self.row_spacing = rospy.get_param("~row_spacing", 8.6)
         self.row_orientation = np.radians(rospy.get_param("~row_orientation_deg", 0.0))
         self.fill_gap_threshold = rospy.get_param("~fill_gap_threshold", 1.3)
         
@@ -72,11 +72,11 @@ class FusionLidarImageOverlay:
         
         # Transformation matrix (LiDAR to Camera)
         self.Rcl = np.array([
-            [-0.130379, -0.991454,  0.004591],
-            [-0.076312,  0.005418, -0.997069],
-            [ 0.988523, -0.130348, -0.076366]
+            [ -0.080003,  -0.996782,   0.005132],
+            [0.014233,  -0.006290,  -0.999879],
+            [0.996693,  -0.079920,   0.014690]
         ], dtype=np.float64)
-        self.tcl = np.array([0.388071, 0.364550, -0.125440], dtype=np.float64)
+        self.tcl = np.array([0.253684, 0.103372, -0.090891], dtype=np.float64)
         
         # Cache
         self.cache_K = None

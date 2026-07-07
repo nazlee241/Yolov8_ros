@@ -27,8 +27,8 @@
     <param name="cluster_min_samples" value="8" />        <!-- Minimum points per cluster -->
     
     <!-- RANSAC cylinder fitting parameters -->
-    <param name="ransac_iterations" value="150" />         <!-- RANSAC iterations for cylinder fitting -->
-    <param name="cylinder_inlier_thresh" value="0.05" />   <!-- Max distance to cylinder surface (meters) -->
+    <param name="ransac_iterations" value="150" />         <!--#150 To find a cylinder. If the value higher more likely to find the perfect cylinder hiding in the noisy points. RANSAC iterations for cylinder fitting -->
+    <param name="cylinder_inlier_thresh" value="0.05" />   <!--#0.05 Only points that are within 5 cm of the cylinder's surface are considered "inliers" (part of the trunk). Max distance to cylinder surface (meters) -->
     <param name="min_cluster_height" value="0.5" />        <!-- Minimum trunk height (meters) -->
     
     <!-- ===== NEW: Row Alignment Parameters ===== -->

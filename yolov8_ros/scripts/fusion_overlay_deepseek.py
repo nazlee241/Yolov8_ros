@@ -9,6 +9,8 @@ import threading
 from ultralytics import YOLO
 import torch
 import os
+import csv
+from datetime import datetime, timezone
 
 class FusionLidarImageOverlay:
     def __init__(self):
@@ -66,6 +68,18 @@ class FusionLidarImageOverlay:
         self.point_size = rospy.get_param("~point_size", 3)
         self.min_depth = rospy.get_param("~min_depth", 0.5)
         self.max_depth = rospy.get_param("~max_depth", 40.0)
+
+        # Fused-image saving params
+        self.save_fused_image = rospy.get_param("~save_fused_image", True)
+        self.save_fused_image_dir = rospy.get_param("~save_fused_image_dir", "/home/amt4/fastcalib_ws/data")
+        self.save_fused_image_interval_sec = rospy.get_param("~save_fused_image_interval_sec", 5.0)
+        self.last_saved_fused_image_time = None
+
+        # # CSV logging params
+        # self.csv_output_path = rospy.get_param("~csv_output_path", "/home/amt4/fastcalib_ws/csv/yolo_distance_detections.csv")
+        # self.csv_interval_sec = rospy.get_param("~csv_interval_sec", 5.0)
+        # self.latest_detection_summary = {"timestamp": None, "detection_count": 0, "distance_m": None}
+        # self._ensure_csv_header()
         
         # Initialize YOLO
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -113,6 +127,44 @@ class FusionLidarImageOverlay:
         
         # Start status timer
         rospy.Timer(rospy.Duration(5.0), self.status_callback)
+        # rospy.Timer(rospy.Duration(self.csv_interval_sec), self.csv_timer_callback)
+
+    # def _ensure_csv_header(self):
+    #     output_dir = os.path.dirname(self.csv_output_path)
+    #     if output_dir:
+    #         os.makedirs(output_dir, exist_ok=True)
+
+    #     if not os.path.exists(self.csv_output_path):
+    #         with open(self.csv_output_path, "w", newline="") as csv_file:
+    #             writer = csv.writer(csv_file)
+    #             writer.writerow(["timestamp", "yolo_detections", "distance_m"])
+
+    # def update_detection_summary(self, detection_count, distance_m):
+    #     self.latest_detection_summary = {
+    #         "timestamp": datetime.now(timezone.utc).isoformat(),
+    #         "detection_count": int(detection_count),
+    #         "distance_m": None if distance_m is None else float(distance_m),
+    #     }
+
+    # def csv_timer_callback(self, event):
+    #     if self.latest_detection_summary["timestamp"] is None:
+    #         return
+
+    #     timestamp = datetime.now(timezone.utc).isoformat()
+    #     distance_value = self.latest_detection_summary["distance_m"]
+    #     if distance_value is None or np.isnan(distance_value):
+    #         distance_str = ""
+    #     else:
+    #         distance_str = f"{distance_value:.3f}"
+
+    #     with open(self.csv_output_path, "a", newline="") as csv_file:
+    #         writer = csv.writer(csv_file)
+    #         writer.writerow([timestamp, self.latest_detection_summary["detection_count"], distance_str])
+
+    #     rospy.loginfo(
+    #         f"CSV update: detections={self.latest_detection_summary['detection_count']}, "
+    #         f"distance={distance_str if distance_str else 'N/A'}"
+    #     )
     
     def status_callback(self, event):
         """Print status every 5 seconds"""
@@ -196,6 +248,27 @@ class FusionLidarImageOverlay:
         mask = (distances >= lower_bound) & (distances <= upper_bound)
         return points_3d[mask]
     
+    def save_fused_image_frame(self, img):
+        if not self.save_fused_image:
+            return
+
+        now = rospy.Time.now().to_sec()
+        if self.last_saved_fused_image_time is not None:
+            elapsed = now - self.last_saved_fused_image_time
+            if elapsed < self.save_fused_image_interval_sec:
+                return
+
+        self.last_saved_fused_image_time = now
+        os.makedirs(self.save_fused_image_dir, exist_ok=True)
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = os.path.join(self.save_fused_image_dir, f"fused_image_{timestamp}.png")
+        success = cv2.imwrite(filename, img)
+        if success:
+            rospy.loginfo(f"Saved fused image to {filename}")
+        else:
+            rospy.logwarn(f"Failed to save fused image to {filename}")
+
     def process_callback(self, event):
         # Frame skipping
         self.frame_counter += 1
@@ -241,6 +314,7 @@ class FusionLidarImageOverlay:
             # YOLO detection
             if self.yolo_model is None:
                 rospy.logerr("YOLO model not loaded")
+                # self.update_detection_summary(0, None)  #csv
                 return
             
             rospy.logdebug("Running YOLO detection...")
@@ -248,6 +322,7 @@ class FusionLidarImageOverlay:
             
             if len(results) == 0 or results[0].boxes is None:
                 rospy.logwarn("No YOLO detections")
+                # self.update_detection_summary(0, None) #csv
                 # Publish original image with message
                 cv2.putText(img, "No detections", (10, 30), 
                            cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
@@ -279,6 +354,7 @@ class FusionLidarImageOverlay:
             
             if len(target_boxes) == 0:
                 rospy.logwarn(f"No target classes detected. Looking for {self.target_classes}")
+                # self.update_detection_summary(len(boxes), None) #csv
                 # Publish image with message
                 cv2.putText(img, f"No target objects (looking for {self.target_classes})", (10, 30), 
                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
@@ -379,6 +455,14 @@ class FusionLidarImageOverlay:
                     # No points after filtering, distance remains None
                     det['distance'] = None
             
+            # # Update latest detection summary for CSV logging
+            # valid_distances = [det['distance'] for det in target_boxes if det.get('distance') is not None]
+            # if valid_distances:
+            #     median_distance = float(np.median(valid_distances))
+            # else:
+            #     median_distance = None
+            # self.update_detection_summary(len(boxes), median_distance)
+
             # Draw points
             total_points = 0
             for points_data in all_filtered_points:
@@ -413,7 +497,7 @@ class FusionLidarImageOverlay:
                     label = f"Class {class_id} {confidence:.2f} N/A"
                 
                 cv2.putText(img, label, (bbox[0], bbox[1] - 5), 
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
             
             # Add info text
             cv2.putText(img, f"Points: {total_points}", (10, 30), 
@@ -425,6 +509,7 @@ class FusionLidarImageOverlay:
             out_msg = self.bridge.cv2_to_imgmsg(img, encoding="bgr8")
             out_msg.header = img_msg.header
             self.pub.publish(out_msg)
+            self.save_fused_image_frame(img)
             
             rospy.loginfo(f"Published frame with {total_points} LiDAR points")
             
