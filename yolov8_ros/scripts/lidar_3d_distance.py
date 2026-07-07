@@ -90,14 +90,14 @@ class LidarObjectDetector:
         self.output_topic = rospy.get_param("~output_topic", "/lidar_overlay/fused_image")
 
         # LiDAR processing
-        self.ground_threshold = rospy.get_param("~ground_threshold", 0.2)      # points above this z (m)
-        self.cluster_eps = rospy.get_param("~cluster_eps", 0.8)               # DBSCAN epsilon
-        self.cluster_min_samples = rospy.get_param("~cluster_min_samples", 5)
+        self.ground_threshold = rospy.get_param("~ground_threshold", 0.1)      # points above this z (m)
+        self.cluster_eps = rospy.get_param("~cluster_eps", 1.5)          #0.8     # DBSCAN epsilon
+        self.cluster_min_samples = rospy.get_param("~cluster_min_samples", 5) #5
         self.target_height = rospy.get_param("~target_height", 1.5)           # trunk height above ground
-        self.height_tolerance = rospy.get_param("~height_tolerance", 0.3)
+        self.height_tolerance = rospy.get_param("~height_tolerance", 0.3)  #0.3
 
         # ═══════ NEW: maximum range filter ═══════
-        self.max_range = rospy.get_param("~max_range", 10.0)   # meters
+        self.max_range = rospy.get_param("~max_range", 12.0)   # meters
 
         # Tracker parameters
         self.tracker_alpha = rospy.get_param("~tracker_alpha", 0.7)
