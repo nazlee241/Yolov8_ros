@@ -71,9 +71,22 @@ class FusionLidarImageOverlay:
 
         # Fused-image saving params
         self.save_fused_image = rospy.get_param("~save_fused_image", True)
-        self.save_fused_image_dir = rospy.get_param("~save_fused_image_dir", "/home/amt4/fastcalib_ws/data")
+        self.save_fused_image_dir = rospy.get_param("~save_fused_image_dir", "/home/amt4/fastcalib_ws/data/fusion_data")
         self.save_fused_image_interval_sec = rospy.get_param("~save_fused_image_interval_sec", 5.0)
         self.last_saved_fused_image_time = None
+        self.fused_image_counter = 1
+        if os.path.isdir(self.save_fused_image_dir):
+            existing_files = [f for f in os.listdir(self.save_fused_image_dir) if f.startswith("fuse_image_") and f.endswith(".png")]
+            if existing_files:
+                numbers = []
+                for name in existing_files:
+                    stem = name[len("fuse_image_"): -4]
+                    try:
+                        numbers.append(int(stem))
+                    except ValueError:
+                        continue
+                if numbers:
+                    self.fused_image_counter = max(numbers) + 1
 
         # # CSV logging params
         # self.csv_output_path = rospy.get_param("~csv_output_path", "/home/amt4/fastcalib_ws/csv/yolo_distance_detections.csv")
@@ -126,7 +139,7 @@ class FusionLidarImageOverlay:
         rospy.loginfo("="*60)
         
         # Start status timer
-        rospy.Timer(rospy.Duration(5.0), self.status_callback)
+        rospy.Timer(rospy.Duration(1.0), self.status_callback)
         # rospy.Timer(rospy.Duration(self.csv_interval_sec), self.csv_timer_callback)
 
     # def _ensure_csv_header(self):
@@ -261,8 +274,8 @@ class FusionLidarImageOverlay:
         self.last_saved_fused_image_time = now
         os.makedirs(self.save_fused_image_dir, exist_ok=True)
 
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = os.path.join(self.save_fused_image_dir, f"fused_image_{timestamp}.png")
+        filename = os.path.join(self.save_fused_image_dir, f"fuse_image_{self.fused_image_counter}.png")
+        self.fused_image_counter += 1
         success = cv2.imwrite(filename, img)
         if success:
             rospy.loginfo(f"Saved fused image to {filename}")
@@ -496,8 +509,10 @@ class FusionLidarImageOverlay:
                 else:
                     label = f"Class {class_id} {confidence:.2f} N/A"
                 
-                cv2.putText(img, label, (bbox[0], bbox[1] - 5), 
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
+                text_x = bbox[0] + (bbox[2] - bbox[0]) // 2
+                text_y = bbox[1] + (bbox[3] - bbox[1]) // 2
+                cv2.putText(img, label, (text_x, text_y), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
             
             # Add info text
             cv2.putText(img, f"Points: {total_points}", (10, 30), 
@@ -511,7 +526,7 @@ class FusionLidarImageOverlay:
             self.pub.publish(out_msg)
             self.save_fused_image_frame(img)
             
-            rospy.loginfo(f"Published frame with {total_points} LiDAR points")
+            # rospy.loginfo(f"Published frame with {total_points} LiDAR points")
             
         except Exception as e:
             rospy.logerr(f"Processing error: {e}")

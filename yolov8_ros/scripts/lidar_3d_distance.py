@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+from datetime import datetime
+import os
+
 import numpy as np
 import rospy
 import cv2
@@ -87,7 +90,7 @@ class LidarObjectDetector:
         self.image_topic = rospy.get_param("~image_topic", "/zed2i/zed_node/left/image_rect_color")
         self.cam_info_topic = rospy.get_param("~cam_info_topic", "/zed2i/zed_node/left/camera_info")
         self.lidar_topic = rospy.get_param("~lidar_topic", "/ouster/points")
-        self.output_topic = rospy.get_param("~output_topic", "/lidar_overlay/fused_image")
+        self.output_topic = rospy.get_param("~output_topic", "/lidar_overlay/lidar_image")
 
         # LiDAR processing
         self.ground_threshold = rospy.get_param("~ground_threshold", 0.1)      # points above this z (m)
@@ -95,6 +98,25 @@ class LidarObjectDetector:
         self.cluster_min_samples = rospy.get_param("~cluster_min_samples", 5) #5
         self.target_height = rospy.get_param("~target_height", 1.5)           # trunk height above ground
         self.height_tolerance = rospy.get_param("~height_tolerance", 0.3)  #0.3
+
+        # Fused-image saving params
+        self.save_fused_image = rospy.get_param("~save_fused_image", True)
+        self.save_fused_image_dir = rospy.get_param("~save_fused_image_dir", "/home/amt4/fastcalib_ws/data/lidar_distance")
+        self.save_fused_image_interval_sec = rospy.get_param("~save_fused_image_interval_sec", 5.0)
+        self.last_saved_fused_image_time = None
+        self.fused_image_counter = 1
+        if os.path.isdir(self.save_fused_image_dir):
+            existing_files = [f for f in os.listdir(self.save_fused_image_dir) if f.startswith("fuse_image_") and f.endswith(".png")]
+            if existing_files:
+                numbers = []
+                for name in existing_files:
+                    stem = name[len("fuse_image_"): -4]
+                    try:
+                        numbers.append(int(stem))
+                    except ValueError:
+                        continue
+                if numbers:
+                    self.fused_image_counter = max(numbers) + 1
 
         # ═══════ NEW: maximum range filter ═══════
         self.max_range = rospy.get_param("~max_range", 12.0)   # meters
@@ -179,6 +201,27 @@ class LidarObjectDetector:
                 rospy.loginfo(f"Received {len(pts)} LiDAR points")
         except Exception as e:
             rospy.logerr(f"LiDAR callback error: {e}")
+
+    def save_fused_image_if_needed(self, img):
+        if not self.save_fused_image:
+            return
+
+        now = rospy.Time.now().to_sec()
+        if self.last_saved_fused_image_time is not None:
+            elapsed = now - self.last_saved_fused_image_time
+            if elapsed < self.save_fused_image_interval_sec:
+                return
+
+        self.last_saved_fused_image_time = now
+        os.makedirs(self.save_fused_image_dir, exist_ok=True)
+
+        filename = os.path.join(self.save_fused_image_dir, f"lidar_{self.fused_image_counter}.png")
+        self.fused_image_counter += 1
+        success = cv2.imwrite(filename, img)
+        if success:
+            rospy.loginfo(f"Saved fused image to {filename}")
+        else:
+            rospy.logwarn(f"Failed to save fused image to {filename}")
 
     def process_callback(self, event):
         with self.lock:
@@ -307,10 +350,15 @@ class LidarObjectDetector:
                     cv2.putText(img, label, (uc-30, vc-10),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
 
+    
+
             # -- Publish --
             out_msg = self.bridge.cv2_to_imgmsg(img, encoding="bgr8")
             out_msg.header = img_msg.header
             self.pub.publish(out_msg)
+            self.save_fused_image_if_needed(img)
+
+            #rospy.loginfo(f"Published frame with {total_points} LiDAR points")
 
         except Exception as e:
             rospy.logerr(f"Processing error: {e}")
