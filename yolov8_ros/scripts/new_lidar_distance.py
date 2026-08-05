@@ -51,6 +51,10 @@ import sensor_msgs.point_cloud2 as pc2
 from sklearn.cluster import DBSCAN
 from visualization_msgs.msg import Marker, MarkerArray
 from geometry_msgs.msg import Point
+from nav_msgs.msg import OccupancyGrid
+from std_srvs.srv import SetBool, SetBoolResponse
+
+from bev_occupancy_grid import BevGrid, build_occupancy_grid_msg, render_bev_bgr_image
 
 
 # 12 edges of an axis-aligned box given corners in this fixed order:
@@ -304,6 +308,24 @@ class LidarTrunkDetector:
         self.confirmed_color = tuple(rospy.get_param("~confirmed_color_rgb", [0.0, 1.0, 0.0]))
         self.unconfirmed_color = tuple(rospy.get_param("~unconfirmed_color_rgb", [1.0, 0.65, 0.0]))
 
+        # -------- Bird's-Eye View (BEV) occupancy grid --------
+        # Top-down grid built every frame from the same ground-filtered
+        # points/trunk clusters used above. Published as both a standard
+        # nav_msgs/OccupancyGrid (RViz "Map" display, costmap-style tools)
+        # and a colorized sensor_msgs/Image (rqt_image_view, Foxglove,
+        # web_video_server, ...) for viewing without RViz.
+        self.enable_bev = rospy.get_param("~enable_bev", True)
+        self.bev_size_m = rospy.get_param("~bev_size_m", 30.0)          # grid side length, meters
+        self.bev_resolution = rospy.get_param("~bev_resolution", 0.1)   # meters/cell
+        self.bev_max_height = rospy.get_param("~bev_max_height", 3.0)   # drop points above this (canopy/wires)
+        self.bev_show_generic_points = rospy.get_param("~bev_show_generic_points", True)
+        self.bev_show_range_rings = rospy.get_param("~bev_show_range_rings", True)
+        self.bev_ring_spacing_m = rospy.get_param("~bev_ring_spacing_m", 5.0)
+        self.bev_grid_topic = rospy.get_param("~bev_grid_topic", "/lidar_overlay/bev_occupancy_grid")
+        self.bev_image_topic = rospy.get_param("~bev_image_topic", "/lidar_overlay/bev_image")
+        self.bev_toggle_service = rospy.get_param("~bev_toggle_service", "~toggle_bev")
+        self.bev_grid = BevGrid(self.bev_size_m, self.bev_resolution)
+
         # Fused-image saving
         self.save_fused_image = rospy.get_param("~save_fused_image", False)
         self.save_fused_image_dir = rospy.get_param("~save_fused_image_dir", "/home/amt4/fastcalib_ws/data/lidar_distance")
@@ -338,6 +360,10 @@ class LidarTrunkDetector:
         self.marker_pub = rospy.Publisher(self.bbox_marker_topic, MarkerArray, queue_size=5)
         self.prev_marker_ids = set()
 
+        self.bev_grid_pub = rospy.Publisher(self.bev_grid_topic, OccupancyGrid, queue_size=2)
+        self.bev_image_pub = rospy.Publisher(self.bev_image_topic, Image, queue_size=2)
+        self.bev_toggle_srv = rospy.Service(self.bev_toggle_service, SetBool, self._handle_toggle_bev)
+
         self.latest_image = None
         self.latest_cam_info = None
         self.latest_pts = None
@@ -367,6 +393,9 @@ class LidarTrunkDetector:
         rospy.loginfo(f"Confirmation: {self.confirm_hits} consecutive matched frames")
         rospy.loginfo(f"Row spacing prior: {self.row_spacing} m, NMS spacing: {self.min_tree_spacing} m")
         rospy.loginfo(f"2D image bbox: {self.enable_2d_bbox}, 3D RViz bbox: {self.enable_3d_bbox} ({self.bbox_marker_topic})")
+        rospy.loginfo(f"BEV occupancy grid: {self.enable_bev} ({self.bev_size_m}m @ {self.bev_resolution}m/cell) "
+                       f"-> {self.bev_grid_topic}, {self.bev_image_topic}")
+        rospy.loginfo(f"Toggle BEV at runtime: rosservice call {self.bev_toggle_service} \"data: false\"")
         rospy.loginfo("=" * 60)
 
         rospy.Timer(rospy.Duration(5.0), self.status_callback)
@@ -380,6 +409,15 @@ class LidarTrunkDetector:
         rospy.loginfo(f"LiDAR: {self.received_data['lidar']}")
         rospy.loginfo(f"Tracked objects: {len(self.tracker.objects)} (confirmed: {confirmed})")
         rospy.loginfo("==============")
+
+    def _handle_toggle_bev(self, req):
+        """rosservice call <bev_toggle_service> "data: true/false" flips the
+        Bird's-Eye View on/off at runtime -- no restart needed."""
+        with self.lock:
+            self.enable_bev = bool(req.data)
+        state = "ENABLED" if self.enable_bev else "DISABLED"
+        rospy.loginfo(f"[BEV] Bird's-Eye View {state} via service call")
+        return SetBoolResponse(success=True, message=f"BEV occupancy grid {state.lower()}")
 
     def image_callback(self, msg):
         with self.lock:
@@ -521,6 +559,55 @@ class LidarTrunkDetector:
         self.prev_marker_ids = current_ids
         self.marker_pub.publish(array)
 
+    def _publish_bev(self, pts_above, visible, id_to_candidate, lidar_header):
+        """Build + publish the top-down occupancy grid (nav_msgs/OccupancyGrid)
+        and the colorized BEV snapshot (sensor_msgs/Image). No-op whenever
+        BEV is disabled (~enable_bev at startup, or ~toggle_bev at runtime),
+        so it costs nothing when the feature isn't wanted."""
+        if not self.enable_bev:
+            return
+
+        try:
+            frame_id = lidar_header.frame_id if lidar_header is not None else "os_sensor"
+            stamp = lidar_header.stamp if lidar_header is not None else rospy.Time.now()
+
+            # Keep the grid roughly planar: drop returns well above the
+            # sensor (canopy, overhead wires) so they don't clutter the top-down view.
+            band = pts_above[pts_above[:, 2] <= self.bev_max_height]
+            points_xy = band[:, :2]
+
+            trunk_points_list = []
+            trunk_render_list = []
+            for obj in visible:
+                cand = id_to_candidate.get(obj['id'])
+                if cand is None:
+                    continue
+                trunk_points_list.append(cand['points'][:, :2])
+                trunk_render_list.append({
+                    'x': float(obj['centroid'][0]),
+                    'y': float(obj['centroid'][1]),
+                    'radius_m': cand['shape']['mean_radius'],
+                    'confirmed': obj['confirmed'],
+                    'id': obj['id'],
+                    'distance_m': float(np.linalg.norm(obj['centroid'][:2])),
+                })
+
+            grid_msg = build_occupancy_grid_msg(self.bev_grid, points_xy, trunk_points_list, frame_id, stamp)
+            self.bev_grid_pub.publish(grid_msg)
+
+            bev_img = render_bev_bgr_image(
+                self.bev_grid, points_xy, trunk_render_list,
+                show_generic_points=self.bev_show_generic_points,
+                show_range_rings=self.bev_show_range_rings,
+                ring_spacing_m=self.bev_ring_spacing_m,
+            )
+            bev_msg = self.bridge.cv2_to_imgmsg(bev_img, encoding="bgr8")
+            bev_msg.header.frame_id = frame_id
+            bev_msg.header.stamp = stamp
+            self.bev_image_pub.publish(bev_msg)
+        except Exception as e:
+            rospy.logwarn_throttle(5.0, f"BEV publish error: {e}")
+
     def process_callback(self, event):
         with self.lock:
             if not all(self.received_data.values()):
@@ -572,6 +659,7 @@ class LidarTrunkDetector:
 
             if not candidates:
                 self._publish_markers([], {}, lidar_header)
+                self._publish_bev(pts_above, [], {}, lidar_header)
                 out_msg = self.bridge.cv2_to_imgmsg(img, encoding="bgr8")
                 out_msg.header = img_msg.header
                 self.pub.publish(out_msg)
@@ -644,6 +732,9 @@ class LidarTrunkDetector:
 
             # -- 3D wireframe markers (native LiDAR frame, for RViz) --
             self._publish_markers(visible, id_to_candidate, lidar_header)
+
+            # -- Bird's-Eye View occupancy grid + snapshot image --
+            self._publish_bev(pts_above, visible, id_to_candidate, lidar_header)
 
             out_msg = self.bridge.cv2_to_imgmsg(img, encoding="bgr8")
             out_msg.header = img_msg.header
