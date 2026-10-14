@@ -70,8 +70,11 @@ roslaunch yolov8_ros yolo_v8.launch
 
     Confidence threshold for detected objects.
 
-* **`How to Run the scripts`**
-    $ rosrun yolov8_ros new_lidar_distance.py
+* **`How to Run the Early-fusion scripts`**
+
+    $ rosrun yolov8_ros new_lidar_distance.py #include bev
+
+    The weight model is palmtree2.pt in folder weights
     
 
 
